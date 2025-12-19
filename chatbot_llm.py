@@ -1,69 +1,87 @@
-
 """
-chatbot_groq_optimized.py
-Groq API Chatbot with Automated RLHF using PPO
-Direct API key configuration - No .env needed
+chatbot_llm.py
+Groq API Chatbot with Safe Imports for Streamlit Deployment
 """
 
 from groq import Groq
-from Vector_dataset import VectorDBStore
 from datetime import datetime
-from RLFH_feedback import AutomatedRLHFSystem
 import logging
+import os
 
-# ============================================
-# CONFIGURATION - SET YOUR API KEY HERE
-# ============================================
-# ============================================
+# Safe imports with fallbacks
+try:
+    from Vector_dataset import VectorDBStore
+    VECTORDB_AVAILABLE = True
+except Exception as e:
+    logging.warning(f"VectorDB not available: {e}")
+    VECTORDB_AVAILABLE = False
+    
+try:
+    from RLFH_feedback import AutomatedRLHFSystem
+    RLHF_AVAILABLE = True
+except Exception as e:
+    logging.warning(f"RLHF not available: {e}")
+    RLHF_AVAILABLE = False
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
-
 class FlowboticsChatbotOptimized:
-
-        
-    def __init__(self, api_key, model_name="llama-3.3-70b-versatile", persist_directory: str = "./chroma_db",
-                                            enable_rlhf=True):
-
+    """
+    Streamlit-safe chatbot with graceful degradation
+    """
+    
+    def __init__(self, api_key, model_name="llama-3.3-70b-versatile", 
+                 persist_directory: str = "./chroma_db", enable_rlhf=True):
         """
-        Initialize optimized chatbot with Groq API and automated RLHF
+        Initialize optimized chatbot with Groq API
         
         Args:
-            api_key: Groq API key (uses GROQ_API_KEY constant if not provided)
+            api_key: Groq API key
             model_name: Groq model name
-                - llama-3.3-70b-versatile (recommended)
-                - llama-3.1-70b-versatile
-                - mixtral-8x7b-32768
-                - gemma2-9b-it
             persist_directory: ChromaDB storage path
             enable_rlhf: Enable automated RLHF training
         """
         
-        # Use provided key, or fall back to constant
+        # Validate API key
         self.api_key = api_key 
         if not self.api_key:
-            raise ValueError(
-                "Groq API key required! Set GROQ_API_KEY constant at the top of this file "
-                "or pass api_key parameter"
-            )
+            raise ValueError("Groq API key required!")
         
-        self.client = Groq(api_key=self.api_key)
-        self.model_name = model_name
+        # Initialize Groq client
+        try:
+            self.client = Groq(api_key=self.api_key)
+            self.model_name = model_name
+        except Exception as e:
+            raise ValueError(f"Failed to initialize Groq client: {e}")
         
-        # Initialize VectorDB for RAG
-        self.vectordb = VectorDBStore(persist_directory=persist_directory)
+        # Initialize VectorDB (optional)
+        self.vectordb = None
+        if VECTORDB_AVAILABLE:
+            try:
+                self.vectordb = VectorDBStore(persist_directory=persist_directory)
+                logger.info(f"✓ VectorDB loaded: {self.vectordb.get_stats()} chunks")
+            except Exception as e:
+                logger.warning(f"VectorDB initialization failed: {e}")
+                self.vectordb = None
         
-        # Initialize Automated RLHF system
-        self.enable_rlhf = enable_rlhf
-        if enable_rlhf:
-            self.rlhf_system = AutomatedRLHFSystem()
+        # Initialize RLHF (optional)
+        self.rlhf_system = None
+        self.enable_rlhf = enable_rlhf and RLHF_AVAILABLE
+        if self.enable_rlhf:
+            try:
+                self.rlhf_system = AutomatedRLHFSystem()
+                logger.info("✓ RLHF enabled")
+            except Exception as e:
+                logger.warning(f"RLHF initialization failed: {e}")
+                self.rlhf_system = None
+                self.enable_rlhf = False
         
         # Conversation memory
         self.conversation_history = []
         
-        # System prompt (optimized)
+        # System prompt
         self.system_prompt = """You are an AI assistant for Flowbotic, an AI automation agency. You are professional, helpful, and efficient.
 
 Communication Style:
@@ -97,115 +115,12 @@ Pricing Plans:
 - Professional: $149/month (unlimited conversations, priority support)
 - Enterprise: Custom pricing (dedicated support, custom development)
 
-Needs Assessment Process:
-When a user shows interest, gather information by asking about:
-1. Their business type/industry
-2. Current challenges or pain points
-3. Specific goals (e.g., reduce response time, increase leads, automate tasks)
-4. Team size and customer volume
-5. Budget range (if appropriate)
-
-CRITICAL: Ask ONE SPECIFIC question at a time. Never ask multiple questions in one response.
-
-Question Quality Rules:
-- Make questions BINARY or LIMITED CHOICE (2-3 options max)
-- Use "or" to give clear options: "Are you struggling with X or Y?"
-- Avoid open-ended questions that overwhelm
-- Each question should naturally narrow down their needs
-- Questions must be specific to their situation, not generic
-
-Recommendation Framework:
-Based on user responses, suggest tailored solutions:
-
-FOR E-COMMERCE/RETAIL:
-- AI Chatbot for 24/7 customer support and product recommendations
-- Lead generation for abandoned cart recovery
-- Order tracking automation
-→ Ask: "What's your biggest bottleneck - handling customer questions or recovering lost sales?"
-
-FOR SERVICE BUSINESSES (Consulting, Agencies, etc.):
-- Lead qualification chatbot
-- Appointment scheduling automation
-- Client onboarding workflow automation
-→ Ask: "Are you spending too much time on scheduling or qualifying leads?"
-
-FOR B2B COMPANIES:
-- Lead generation and qualification system
-- Sales pipeline automation
-- Customer support chatbot for technical queries
-→ Ask: "What slows down your sales process - finding leads or managing follow-ups?"
-
-FOR HEALTHCARE:
-- HIPAA-compliant chatbots
-- Appointment scheduling automation
-- Patient inquiry handling
-→ Ask: "Is your main challenge appointment management or handling patient questions?"
-
-FOR RESTAURANTS/HOSPITALITY:
-- Reservation automation
-- Order taking chatbot
-- Customer inquiry handling
-→ Ask: "What's more chaotic - managing reservations or taking orders?"
-
-FOR SMALL BUSINESSES (< 10 employees):
-- Starter plan recommended
-- Focus: Customer support chatbot + basic lead capture
-- Best for: Handling common questions, collecting leads
-
-FOR MEDIUM BUSINESSES (10-50 employees):
-- Professional plan recommended
-- Focus: Multi-channel automation + CRM integration
-- Best for: Scaling operations without hiring
-
-FOR LARGE ENTERPRISES (50+ employees):
-- Enterprise plan recommended
-- Focus: Custom workflows + dedicated support
-- Best for: Complex integrations, high volume
-
 Response Strategy:
 1. Listen: Acknowledge what the user shares (1 sentence)
 2. Ask: ONE specific binary or limited-choice question
 3. Wait: Let them answer before explaining solutions
 4. Recommend: After understanding, suggest ONE specific solution
 5. Guide: Provide clear next step
-
-NEVER skip steps. NEVER explain solutions before understanding their specific problem.
-
-Example Response Flow:
-User: "Tell me about services"
-You: "We help businesses automate customer interactions with AI chatbots and smart workflows. What type of business do you run?"
-
-User: "I run an online store"
-You: "Perfect! What's your biggest bottleneck - handling customer questions or recovering lost sales?"
-
-User: "Customer questions take forever"
-You: "I hear you. How many questions do you typically handle each day?"
-
-User: "Yes I want to new solution"
-You: "Great! Before we dive in, how many customer questions are you handling daily - under 50, 50-100, or more than 100?"
-
-User: "About 50-100 daily"
-You: "That's a solid volume. What types of questions come up most - product details, shipping info, or returns?"
-
-User: "Mostly shipping and returns"
-You: "Perfect, our AI handles those extremely well. Most stores automate 70% of those questions. Ready to see which plan fits your volume?"
-
-User: "I have a healthcare clinic"
-You: "Great! Is your main challenge appointment management or handling patient questions?"
-
-User: "Appointments are a mess"
-You: "Understood. How many appointments do you schedule per day?"
-
-User: "I'm a consultant"
-You: "Nice! Are you spending too much time on scheduling meetings or qualifying leads?"
-
-CRITICAL PATTERN:
-1. Acknowledge their business type (one sentence)
-2. Ask ONE binary/limited choice question
-3. Wait for their answer
-4. Ask about VOLUME/SCALE before suggesting solutions
-5. Ask about TYPES/SPECIFICS before pricing
-6. Only mention plans after you understand their needs fully
 
 Response Guidelines:
 - Keep responses SHORT (2-3 sentences maximum)
@@ -216,56 +131,49 @@ Response Guidelines:
 - Make questions easy to answer (not open-ended)
 - Questions must be directly relevant to their previous answer
 - Never ask multiple things in one question
-- Structure complex information with bullet points ONLY when user asks for details
-- Provide accurate, complete information
-- If unsure, acknowledge limitations honestly
-- Guide users toward solutions
-- Avoid phrases like "based on context" or "according to information"
-- Answer questions directly without unnecessary preamble
 - Always connect features to the user's specific needs
 - Use concrete examples relevant to their industry
 - End with a clear question or call-to-action
 - NEVER list all services/features unless specifically asked
-- Focus on relevance, not completeness
+- Focus on relevance, not completeness"""
 
-Red Flags to Address:
-- If user seems price-sensitive: Emphasize ROI and time savings
-- If user is skeptical: Offer specific use cases and results
-- If user is confused: Simplify and focus on one solution at a time
-
-Your role: Professional AI assistant that listens, understands business needs, and recommends the right Flowbotic solutions with clear, personalized explanations."""
-
-        
-        logger.info(f"✓ Optimized Chatbot initialized with Groq API")
+        logger.info(f"✓ Chatbot initialized with Groq API")
         logger.info(f"✓ Model: {model_name}")
-        logger.info(f"✓ VectorDB loaded: {self.vectordb.get_stats()} chunks")
-        logger.info(f"✓ RLHF: {'Enabled' if enable_rlhf else 'Disabled'}")
+        logger.info(f"✓ VectorDB: {'Available' if self.vectordb else 'Disabled'}")
+        logger.info(f"✓ RLHF: {'Enabled' if self.enable_rlhf else 'Disabled'}")
     
     def get_relevant_context(self, question: str, n_results: int = 3) -> tuple:
-        """Retrieve relevant context from VectorDB"""
-        results = self.vectordb.query(question, n_results=n_results)
-        
-        if not results or not results['documents'][0]:
+        """Retrieve relevant context from VectorDB (if available)"""
+        if not self.vectordb:
             return "", []
         
-        # Format context
-        context_parts = []
-        sources = []
-        
-        for doc, meta in zip(results['documents'][0], results['metadatas'][0]):
-            context_parts.append(f"[Source: {meta['source']}]\n{doc}")
-            sources.append(meta['source'])
-        
-        context = "\n\n---\n\n".join(context_parts)
-        return context, sources
+        try:
+            results = self.vectordb.query(question, n_results=n_results)
+            
+            if not results or not results['documents'][0]:
+                return "", []
+            
+            # Format context
+            context_parts = []
+            sources = []
+            
+            for doc, meta in zip(results['documents'][0], results['metadatas'][0]):
+                context_parts.append(f"[Source: {meta['source']}]\n{doc}")
+                sources.append(meta['source'])
+            
+            context = "\n\n---\n\n".join(context_parts)
+            return context, sources
+        except Exception as e:
+            logger.warning(f"Context retrieval failed: {e}")
+            return "", []
     
     def chat(self, user_message: str, use_rag: bool = True) -> str:
         """
-        Generate response with automated RLHF
+        Generate response with optional RAG
         
         Args:
             user_message: User's question
-            use_rag: Whether to use RAG
+            use_rag: Whether to use RAG (if available)
         
         Returns:
             Assistant's response
@@ -278,8 +186,8 @@ Your role: Professional AI assistant that listens, understands business needs, a
         sources = []
         context = ""
         
-        # Build prompt
-        if use_rag and not is_greeting:
+        # Build prompt with RAG (if available)
+        if use_rag and not is_greeting and self.vectordb:
             context, sources = self.get_relevant_context(user_message)
             
             if context:
@@ -304,7 +212,7 @@ Answer naturally without mentioning the context."""
         # Prepare messages
         messages = [
             {"role": "system", "content": self.system_prompt},
-            *self.conversation_history[-10:]  # Keep last 10 exchanges for context
+            *self.conversation_history[-10:]  # Keep last 10 exchanges
         ]
         
         # Get response from Groq
@@ -327,19 +235,22 @@ Answer naturally without mentioning the context."""
             "content": assistant_message
         })
         
-        # Automated RLHF - process interaction
-        if self.enable_rlhf:
-            self.rlhf_system.process_interaction(
-                question=user_message,
-                response=assistant_message,
-                context=context,
-                auto_train=True
-            )
+        # Process with RLHF (if available)
+        if self.enable_rlhf and self.rlhf_system:
+            try:
+                self.rlhf_system.process_interaction(
+                    question=user_message,
+                    response=assistant_message,
+                    context=context,
+                    auto_train=True
+                )
+            except Exception as e:
+                logger.warning(f"RLHF processing failed: {e}")
         
         return assistant_message
     
     def stream_chat(self, user_message: str, use_rag: bool = True):
-        """Stream response with automated RLHF"""
+        """Stream response with optional RAG"""
         
         greetings = ['hi', 'hey', 'hello', 'hola', 'yo', 'sup', 'wassup']
         is_greeting = user_message.lower().strip() in greetings
@@ -347,7 +258,8 @@ Answer naturally without mentioning the context."""
         sources = []
         context = ""
         
-        if use_rag and not is_greeting:
+        # Build prompt with RAG (if available)
+        if use_rag and not is_greeting and self.vectordb:
             context, sources = self.get_relevant_context(user_message)
             
             if context:
@@ -403,28 +315,31 @@ Answer naturally without mentioning the context."""
             "content": full_response
         })
         
-        # Automated RLHF
-        if self.enable_rlhf:
-            self.rlhf_system.process_interaction(
-                question=user_message,
-                response=full_response,
-                context=context,
-                auto_train=True
-            )
+        # Process with RLHF (if available)
+        if self.enable_rlhf and self.rlhf_system:
+            try:
+                self.rlhf_system.process_interaction(
+                    question=user_message,
+                    response=full_response,
+                    context=context,
+                    auto_train=True
+                )
+            except Exception as e:
+                logger.warning(f"RLHF processing failed: {e}")
     
     def show_rlhf_stats(self):
         """Display RLHF statistics"""
-        if self.enable_rlhf:
+        if self.enable_rlhf and self.rlhf_system:
             self.rlhf_system.get_statistics()
         else:
-            print("RLHF is not enabled")
+            print("RLHF is not available")
     
     def show_improvements(self):
         """Show improvement suggestions"""
-        if self.enable_rlhf:
+        if self.enable_rlhf and self.rlhf_system:
             self.rlhf_system.get_improvement_suggestions()
         else:
-            print("RLHF is not enabled")
+            print("RLHF is not available")
     
     def clear_history(self):
         """Clear conversation history"""
@@ -444,96 +359,3 @@ Answer naturally without mentioning the context."""
                 f.write(f"{role}:\n{content}\n\n")
         
         logger.info(f"✓ Conversation saved to {filename}")
-
-
-def interactive_chat():
-    """Run interactive chatbot with automated RLHF"""
-    
-    print("\n" + "="*80)
-    print("FLOWBOTICS AI CHATBOT (Groq API + Automated RLHF)")
-    print("="*80)
-    print("\nCommands:")
-    print("  'stats'    - Show RLHF training statistics")
-    print("  'improve'  - Show improvement suggestions")
-    print("  'clear'    - Clear conversation history")
-    print("  'save'     - Save conversation")
-    print("  'quit'     - Exit")
-    print("="*80 + "\n")
-    
-    # Initialize chatbot
-    try:
-        chatbot = FlowboticsChatbotOptimized(
-            model_name="llama-3.3-70b-versatile",
-            enable_rlhf=True
-        )
-    except ValueError as e:
-        print(f"\n❌ Error: {e}")
-        print("\nTo fix this:")
-        print("1. Get API key from: https://console.groq.com/keys")
-        print("2. Set GROQ_API_KEY constant at the top of this file")
-        return
-    
-    while True:
-        try:
-            user_input = input("You: ").strip()
-            
-            if not user_input:
-                continue
-            
-            # Handle commands
-            if user_input.lower() in ['quit', 'exit', 'q']:
-                print("\n👋 Goodbye!")
-                break
-            
-            if user_input.lower() == 'stats':
-                chatbot.show_rlhf_stats()
-                continue
-            
-            if user_input.lower() == 'improve':
-                chatbot.show_improvements()
-                continue
-            
-            if user_input.lower() == 'clear':
-                chatbot.clear_history()
-                print("✓ Conversation cleared!\n")
-                continue
-            
-            if user_input.lower() == 'save':
-                chatbot.save_conversation()
-                continue
-            
-            # Get streaming response
-            print("\nAssistant: ", end="", flush=True)
-            for token in chatbot.stream_chat(user_input):
-                print(token, end="", flush=True)
-            print("\n")
-        
-        except KeyboardInterrupt:
-            print("\n\n👋 Goodbye!")
-            break
-        except Exception as e:
-            logger.error(f"Error: {e}")
-            print(f"\n❌ Error: {e}\n")
-
-
-# if __name__ == "__main__":
-#     # Check if API key is set
-#     if not api_key:
-#         print("\n" + "="*80)
-#         print("⚠️  GROQ_API_KEY not set")
-#         print("="*80)
-#         print("\nSetup Instructions:")
-#         print("1. Get your API key: https://console.groq.com/keys")
-#         print("2. Open this file and set GROQ_API_KEY at the top:")
-#         print('   GROQ_API_KEY = "your-key-here"')
-#         print("="*80 + "\n")
-#     else:
-#         # Start interactive chatbot
-#         interactive_chat()
-
-if __name__ == "__main__":
-    # Start interactive chatbot
-    try:
-        interactive_chat()
-    except Exception as e:
-        print(f"Error: {e}")
